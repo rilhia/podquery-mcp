@@ -1,0 +1,164 @@
+{
+  "manifest_version": "0.4",
+  "name": "podquery-mcp",
+  "display_name": "PodQuery",
+  "version": "0.2.1",
+  "description": "Clinical audit of your Glooko / Omnipod 5 diabetes data, directly inside Claude.",
+  "long_description": "PodQuery connects your Glooko / Omnipod 5 diabetes history straight into Claude Desktop. It downloads your data from Glooko, keeps a local archive on your own machine, and exposes it to Claude as a set of analytical tools (time in range, GMI, trends, an enriched bolus log matched against the pump settings active at the time, Omnipod 5 basal delivery states, and more) so Claude can pull exactly the aggregate it needs instead of raw data dumps. A built-in 'Clinical auditor persona' prompt turns Claude into a direct, no-nonsense analyst of your control.\n\nYour Glooko username and password stay on your own machine: they are sent straight from this extension to Glooko's servers and are never seen by Anthropic or this extension's author. If you would rather try it first, leave the Glooko fields blank and the extension serves a bundled three-month sample dataset (the author's own real data, shared for exploration) with no account and no network access at all.\n\nThis tool is for understanding your data and asking better questions of your diabetes care team. It is not a medical device and must never be used to decide changes to your therapy.",
+  "author": {
+    "name": "Richard",
+    "url": "https://github.com/rilhia"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/rilhia/podquery-mcp"
+  },
+  "homepage": "https://github.com/rilhia/podquery-mcp",
+  "support": "https://github.com/rilhia/podquery-mcp/issues",
+  "license": "MIT",
+  "icon": "images/icon.png",
+  "keywords": [
+    "podquery",
+    "diabetes",
+    "glooko",
+    "omnipod",
+    "omnipod 5",
+    "cgm",
+    "insulin",
+    "type 1 diabetes",
+    "health",
+    "clinical audit"
+  ],
+  "server": {
+    "type": "node",
+    "entry_point": "src/server.js",
+    "mcp_config": {
+      "command": "node",
+      "args": ["${__dirname}/src/server.js"],
+      "env": {
+        "GLOOKO_EMAIL": "${user_config.glooko_email}",
+        "GLOOKO_PASSWORD": "${user_config.glooko_password}",
+        "GLOOKO_GLUCOSE_UNIT": "${user_config.glooko_glucose_unit}",
+        "OMNI_UNITS": "${user_config.omni_units}",
+        "OMNI_LOWER": "${user_config.omni_lower}",
+        "OMNI_UPPER": "${user_config.omni_upper}",
+        "OMNI_OLDEST_DATE": "${user_config.omni_oldest_date}",
+        "OMNI_DATA_DIR": "${user_config.data_directory}"
+      }
+    }
+  },
+  "tools": [
+    {
+      "name": "get_diabetes_summary",
+      "description": "Fixed-size aggregate overview for any window: time in range, GMI, variability, best/worst day and hour, insulin, carbs, and the pump settings in force. The go-to first call for any question."
+    },
+    {
+      "name": "get_trend",
+      "description": "Splits a span into time buckets (day/week/month/quarter, or fixed-length) and computes each independently, for month-by-month or week-by-week comparisons in a single call."
+    },
+    {
+      "name": "get_glucose",
+      "description": "Individual timestamped CGM readings for a short window, optionally filtered to just hypos, hypers, or in-range readings."
+    },
+    {
+      "name": "get_chart_html",
+      "description": "Builds a clinical-report-style glucose chart (colour-coded in-range/low/high trace, shaded target range, bolus markers -- each hoverable on its own for that bolus's units/carbs/type -- TIR/average header stats, legend, hover tooltips), saves it to a file, and opens it directly in the default browser. Accepts a `ranges` array to compare several separate/non-contiguous dates on one chart. For multi-day windows, includes a chronological/overlay toggle plus per-day filter chips to compare every day on a shared 24-hour axis or hide individual days, with stats recalculating for whichever days are shown. Also includes a collapsible 'Day details' panel per calendar day with that day's full glucose control, extremes, best/worst hour, insulin, bolus types, carbs, and settings in force -- every term there (CV, GMI, DIA, ISF, etc) has a plain-English hover tooltip. Plots every real CGM reading with no smoothing for a typical window (up to about a month); a much wider window is thinned by default but flags this in the response so the patient can request full detail via `resolution` (1 = every reading, 2 = every other one, etc)."
+    },
+    {
+      "name": "get_chart_series",
+      "description": "Glucose downsampled to a target number of points for plotting, with a min/max band per point plus bolus markers, for drawing a chart over a wide window cheaply."
+    },
+    {
+      "name": "get_enriched_bolus_log",
+      "description": "Every bolus in a window enriched with the glucose at delivery and the ISF/carb-ratio/target/DIA active at that moment, plus delivered-vs-programmed and calculator overrides."
+    },
+    {
+      "name": "get_hourly_trends",
+      "description": "Time in range and average glucose pooled by clock-hour across a window, for spotting recurring time-of-day patterns like the dawn phenomenon."
+    },
+    {
+      "name": "get_basal_delivery",
+      "description": "What the Omnipod 5 algorithm was doing with basal delivery over time (normal / suspend / max / limited), as behavioural states, not units."
+    },
+    {
+      "name": "get_daily_insulin",
+      "description": "Glooko's own per-day basal/bolus/total insulin totals, shown verbatim, for a day-by-day table."
+    },
+    {
+      "name": "get_settings_history",
+      "description": "Every Omnipod 5 setting change in force during a window: DIA, max basal rate, and the time-segmented target/ISF/carb-ratio profiles."
+    },
+    {
+      "name": "get_device_events",
+      "description": "Pod and CGM sensor change timestamps, useful as context for nearby glucose disruption."
+    },
+    {
+      "name": "get_meal_window_analysis",
+      "description": "A focused look at one meal or bolus event: 30 minutes before to 3 hours after, with the glucose trace and any boluses in that window."
+    }
+  ],
+  "user_config": {
+    "glooko_email": {
+      "type": "string",
+      "title": "Glooko email",
+      "description": "Leave blank to use the bundled offline sample data instead.",
+      "required": false
+    },
+    "glooko_password": {
+      "type": "string",
+      "title": "Glooko password",
+      "description": "Leave blank with the email above to use sample data.",
+      "required": false,
+      "sensitive": true
+    },
+    "glooko_glucose_unit": {
+      "type": "string",
+      "title": "Glooko account's glucose unit",
+      "description": "Unit your Glooko account itself uses: mmol or mgdl.",
+      "default": "mmol",
+      "required": true
+    },
+    "omni_units": {
+      "type": "string",
+      "title": "Display unit",
+      "description": "How Claude shows glucose values: mmol or mgdl.",
+      "default": "mmol",
+      "required": true
+    },
+    "omni_lower": {
+      "type": "number",
+      "title": "Low (hypo) boundary",
+      "description": "Readings below this count as low. Default 3.9 mmol/L.",
+      "default": 3.9,
+      "required": true
+    },
+    "omni_upper": {
+      "type": "number",
+      "title": "High (hyper) boundary",
+      "description": "Readings above this count as high. Default 10.0 mmol/L.",
+      "default": 10,
+      "required": true
+    },
+    "omni_oldest_date": {
+      "type": "string",
+      "title": "History to load on first run (YYYY-MM-DD)",
+      "description": "Earliest date you have Omnipod data, or want to look back to.",
+      "default": "2025-01-01",
+      "required": true
+    },
+    "data_directory": {
+      "type": "directory",
+      "title": "Data folder",
+      "description": "Where your downloaded diabetes data is stored locally.",
+      "default": "${HOME}/Documents",
+      "required": true
+    }
+  },
+  "compatibility": {
+    "claude_desktop": ">=0.10.0",
+    "platforms": ["darwin", "win32"],
+    "runtimes": {
+      "node": ">=18.0.0"
+    }
+  }
+}
