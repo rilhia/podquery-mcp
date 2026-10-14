@@ -5,7 +5,7 @@
 <div align="center">
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.2.1--poc-orange.svg)](https://github.com/rilhia/podquery-mcp/releases)
+[![Version](https://img.shields.io/badge/version-0.2.2--poc-orange.svg)](https://github.com/rilhia/podquery-mcp/releases)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey.svg)](#who-this-is-for)
 [![Node](https://img.shields.io/badge/node-%3E%3D18.0.0-brightgreen.svg)](#building-the-mcpb-yourself)
 
@@ -21,7 +21,7 @@
 > This is the **MCPB (MCP Bundle) edition**, built exclusively for **Claude Desktop**. It replaces the earlier Docker-based version of this project (which also supported Open WebUI and a raw web API) with a single `.mcpb` file you install with one click: no Docker, no terminal, no editing config files by hand. If you need the multi-platform Docker version instead, see the [original web app](https://github.com/rilhia/omni-endo-ai) or an earlier tag of this repository.
 
 > [!NOTE]
-> **Early proof-of-concept (v0.2.1).** PodQuery is under active development. The core tools and data pipeline are working end to end (this is my own real data behind the bundled sample set), but interfaces, defaults, and tool behaviour may still change between releases. Feedback and issues are very welcome.
+> **Early proof-of-concept (v0.2.2).** PodQuery is under active development. The core tools and data pipeline are working end to end (this is my own real data behind the bundled sample set), but interfaces, defaults, and tool behaviour may still change between releases. Feedback and issues are very welcome.
 
 > [!TIP]
 > **Allergic to instructions? Let an AI do the talking.** 🤖

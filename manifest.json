@@ -2,7 +2,7 @@
   "manifest_version": "0.4",
   "name": "podquery-mcp",
   "display_name": "PodQuery",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Clinical audit of your Glooko / Omnipod 5 diabetes data, directly inside Claude.",
   "long_description": "PodQuery connects your Glooko / Omnipod 5 diabetes history straight into Claude Desktop. It downloads your data from Glooko, keeps a local archive on your own machine, and exposes it to Claude as a set of analytical tools (time in range, GMI, trends, an enriched bolus log matched against the pump settings active at the time, Omnipod 5 basal delivery states, and more) so Claude can pull exactly the aggregate it needs instead of raw data dumps. A built-in 'Clinical auditor persona' prompt turns Claude into a direct, no-nonsense analyst of your control.\n\nYour Glooko username and password stay on your own machine: they are sent straight from this extension to Glooko's servers and are never seen by Anthropic or this extension's author. If you would rather try it first, leave the Glooko fields blank and the extension serves a bundled three-month sample dataset (the author's own real data, shared for exploration) with no account and no network access at all.\n\nThis tool is for understanding your data and asking better questions of your diabetes care team. It is not a medical device and must never be used to decide changes to your therapy.",
   "author": {
