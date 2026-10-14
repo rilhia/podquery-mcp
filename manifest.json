@@ -50,7 +50,7 @@
   "tools": [
     {
       "name": "get_diabetes_summary",
-      "description": "Fixed-size aggregate overview for any window: time in range, GMI, variability, best/worst day and hour, insulin, carbs, and the pump settings in force. The go-to first call for any question."
+      "description": "Fixed-size aggregate overview for any window: time in range, GMI, variability, best/worst day and hour, insulin, carbs, the pump settings in force, and basal delivery (time in normal/suspend/max/limited states). The go-to first call for any question."
     },
     {
       "name": "get_trend",
@@ -62,7 +62,7 @@
     },
     {
       "name": "get_chart_html",
-      "description": "Builds a clinical-report-style glucose chart (colour-coded in-range/low/high trace, shaded target range, bolus markers -- each hoverable on its own for that bolus's units/carbs/type -- TIR/average header stats, legend, hover tooltips), saves it to a file, and opens it directly in the default browser. Accepts a `ranges` array to compare several separate/non-contiguous dates on one chart. For multi-day windows, includes a chronological/overlay toggle plus per-day filter chips to compare every day on a shared 24-hour axis or hide individual days, with stats recalculating for whichever days are shown. Also includes a collapsible 'Day details' panel per calendar day with that day's full glucose control, extremes, best/worst hour, insulin, bolus types, carbs, and settings in force -- every term there (CV, GMI, DIA, ISF, etc) has a plain-English hover tooltip. Plots every real CGM reading with no smoothing for a typical window (up to about a month); a much wider window is thinned by default but flags this in the response so the patient can request full detail via `resolution` (1 = every reading, 2 = every other one, etc)."
+      "description": "Builds a clinical-report-style glucose chart (colour-coded in-range/low/high trace, shaded target range, bolus markers -- each hoverable on its own for that bolus's units/carbs/type -- TIR/average header stats, a basal-state strip along the bottom showing normal/suspended/at-max/limited delivery, legend, hover tooltips), saves it to a file, and opens it directly in the default browser. Accepts a `ranges` array to compare several separate/non-contiguous dates on one chart. For multi-day windows, includes a chronological/overlay toggle plus per-day filter chips to compare every day on a shared 24-hour axis or hide individual days, with stats recalculating for whichever days are shown. Also includes a collapsible 'Day details' panel per calendar day with that day's full glucose control, extremes, best/worst hour, insulin, basal delivery states, bolus types, carbs, and settings in force -- every term there (CV, GMI, DIA, ISF, etc) has a plain-English hover tooltip. Plots every real CGM reading with no smoothing for a typical window (up to about a month); a much wider window is thinned by default but flags this in the response so the patient can request full detail via `resolution` (1 = every reading, 2 = every other one, etc)."
     },
     {
       "name": "get_chart_series",
@@ -74,7 +74,7 @@
     },
     {
       "name": "get_hourly_trends",
-      "description": "Time in range and average glucose pooled by clock-hour across a window, for spotting recurring time-of-day patterns like the dawn phenomenon."
+      "description": "Time in range and average glucose pooled by clock-hour across a window, for spotting recurring time-of-day patterns like the dawn phenomenon, with the share of each hour the algorithm spent suspended or at max."
     },
     {
       "name": "get_basal_delivery",

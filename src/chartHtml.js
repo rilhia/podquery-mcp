@@ -152,6 +152,16 @@ const HTML_HEAD = `<!doctype html>
   .zone-dot.zone-critical { fill: var(--critical); }
   .zone-dot.zone-serious { fill: var(--serious); }
   .bolus-marker { fill: var(--series-violet); cursor: pointer; }
+  .basal-seg { pointer-events: none; }
+  .basal-normal { fill: var(--axis); }
+  .basal-suspend { fill: var(--series-blue); }
+  .basal-max { fill: var(--warning); }
+  .basal-limited { fill: var(--ink-muted); }
+  .legend-swatch-basal { display: inline-block; width: 16px; height: 6px; border-radius: 1px; }
+  .legend-swatch-basal.basal-normal { background: var(--axis); }
+  .legend-swatch-basal.basal-suspend { background: var(--series-blue); }
+  .legend-swatch-basal.basal-max { background: var(--warning); }
+  .legend-swatch-basal.basal-limited { background: var(--ink-muted); }
   .cat-line { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
   .cat-dot { stroke: none; }
   .cat-bolus { cursor: pointer; }
@@ -244,7 +254,7 @@ const HTML_HEAD = `<!doctype html>
     <button class="table-toggle" id="table-toggle" type="button">Show data table</button>
     <div class="data-table-wrap" id="data-table-wrap">
       <table class="data-table">
-        <thead><tr><th>Time</th><th class="num">Avg</th><th class="num">Min</th><th class="num">Max</th><th class="num">n</th><th>Bolus</th></tr></thead>
+        <thead><tr><th>Time</th><th class="num">Avg</th><th class="num">Min</th><th class="num">Max</th><th class="num">n</th><th>Bolus</th><th>Basal</th></tr></thead>
         <tbody id="table-body"></tbody>
       </table>
     </div>
@@ -365,6 +375,22 @@ const HTML_TAIL = `;
   dts.sort(function (a, b) { return a - b; });
   var medianDt = dts.length ? dts[Math.floor(dts.length / 2)] : 300;
   var gapThreshold = Math.max(3 * medianDt, 1800);
+
+  // --- basal-state lookup: DATA.basal is [startEpoch, endEpoch, state]
+  // triples (sorted, clipped to the window). basalAt() finds the state in
+  // force at an epoch by binary search; null when no interval covers it.
+  var basalIv = (DATA.basal || []).slice().sort(function (a, b) { return a[0] - b[0]; });
+  var BASAL_LEGEND = { normal: 'normal', suspend: 'suspended', max: 'at max', limited: 'limited (no CGM)' };
+  var BASAL_LABEL = { normal: 'Normal', suspend: 'Suspended', max: 'At max', limited: 'Limited (no CGM)' };
+  function basalAt(epoch) {
+    var lo = 0, hi = basalIv.length - 1, found = null;
+    while (lo <= hi) {
+      var mid = (lo + hi) >> 1;
+      if (basalIv[mid][0] <= epoch) { found = mid; lo = mid + 1; } else hi = mid - 1;
+    }
+    if (found !== null && epoch < basalIv[found][1]) return basalIv[found][2];
+    return null;
+  }
 
   var ZONE_COLOR = { inrange: 'good', low: 'critical', high: 'serious' };
   var ZONE_LABEL = { inrange: 'In range', low: 'Low', high: 'High' };
@@ -529,6 +555,8 @@ const HTML_TAIL = `;
           }).join('; ')
         : '';
       row.appendChild(el('td', null, bolusText));
+      var bs2 = basalAt(p.epoch);
+      row.appendChild(el('td', null, bs2 ? BASAL_LABEL[bs2] : ''));
       tableBody.appendChild(row);
     });
   }
@@ -629,6 +657,20 @@ const HTML_TAIL = `;
         var cx = (segLeft + segRight) / 2;
         svgParts.push('<text class="day-label" x="' + cx.toFixed(1) + '" y="' + (bandY + 10).toFixed(1) + '" text-anchor="middle">' + escXml(vd.label) + '</text>');
       }
+      // Basal-state strip along the bottom edge of the plot for this day's
+      // slot. Each interval is clipped to the day and drawn as a block, so
+      // the strip is continuous where data exists and blank where it does not.
+      if (basalIv.length) {
+        var bSpan = vd.endEpoch - vd.startEpoch || 1;
+        basalIv.forEach(function (iv) {
+          if (iv[1] <= vd.startEpoch || iv[0] >= vd.endEpoch) return;
+          var bs = Math.max(iv[0], vd.startEpoch), be = Math.min(iv[1], vd.endEpoch);
+          var bx = segLeft + ((bs - vd.startEpoch) / bSpan) * slotWidth;
+          var bw = ((be - bs) / bSpan) * slotWidth;
+          if (bw <= 0) return;
+          svgParts.push('<rect class="basal-seg basal-' + iv[2] + '" x="' + bx.toFixed(1) + '" y="' + (plotBottom - 6).toFixed(1) + '" width="' + bw.toFixed(1) + '" height="6" />');
+        });
+      }
       (vd.ticks || []).forEach(function (tick) {
         var te = Date.parse(tick.t) / 1000;
         // Skip this day's OWN start-of-day tick once it isn't the first
@@ -691,6 +733,13 @@ const HTML_TAIL = `;
     legendItems.push(['Target range (' + fmt(DATA.low) + '–' + fmt(DATA.high) + ')', 'legend-swatch-block legend-target']);
     legendItems.push(['Reading spread (min–max)', 'legend-swatch-block legend-band']);
     if (DATA.boluses && DATA.boluses.length) legendItems.push(['Bolus', 'legend-swatch-tri']);
+    if (basalIv.length) {
+      var basalPresent = {};
+      basalIv.forEach(function (iv) { basalPresent[iv[2]] = true; });
+      ['normal', 'suspend', 'max', 'limited'].forEach(function (k) {
+        if (basalPresent[k]) legendItems.push(['Basal: ' + BASAL_LEGEND[k], 'legend-swatch-basal basal-' + k]);
+      });
+    }
     legendItems.forEach(function (li) {
       var item = el('span', 'legend-item');
       item.appendChild(el('span', li[1]));
@@ -850,6 +899,12 @@ const HTML_TAIL = `;
     return hh + ':' + mm;
   }
 
+  function fmtMins(m) {
+    if (m == null || isNaN(m)) return '—';
+    var h = Math.floor(m / 60), r = m % 60;
+    return h ? h + 'h ' + (r < 10 ? '0' : '') + r + 'm' : r + 'm';
+  }
+
   function numFmt(v, dp) {
     if (v == null || typeof v !== 'number' || isNaN(v)) return '—';
     return (+v.toFixed(dp == null ? 2 : dp)).toString();
@@ -891,10 +946,17 @@ const HTML_TAIL = `;
     'Target': 'The glucose target(s) the Omnipod 5 algorithm aims for, by time of day.',
     'ISF': 'Insulin Sensitivity Factor: how much one unit of insulin is expected to lower glucose.',
     'Carb ratio': 'Grams of carbohydrate covered by one unit of insulin, by time of day.',
+    'Normal': 'Time the Omnipod 5 algorithm delivered basal in its ordinary automated mode this day. A state, not an insulin amount.',
+    'Suspended': 'Time the algorithm paused basal delivery, typically to prevent a predicted low. A state, not an insulin amount.',
+    'At max': 'Time the algorithm delivered at its basal ceiling, typically while fighting a rise. A state, not an insulin amount.',
+    'Limited': 'Time the system lost CGM signal for over 20 minutes and ran a fixed preset basal, so the algorithm was NOT adjusting.',
+    'Longest suspend': 'The single longest continuous stretch of suspended basal this day.',
+    'Longest at max': 'The single longest continuous stretch at the basal ceiling this day.',
   };
   var GROUP_TOOLTIPS = {
     'Bolus types': 'Meal: insulin dosed for food. Manual correction: a dose entered by hand to bring down a high. System correction: an automatic correction dose from the Omnipod 5 algorithm. Meal+correction: one combined dose covering both.',
     'Carbs': 'Total grams of carbohydrate logged alongside boluses this day.',
+    'Basal delivery': 'How the Omnipod 5 algorithm spent the day: minutes and share of observed time in each state, with the number of separate stretches (e.g. 3×). States, not insulin units; wall-clock times.',
   };
 
   function buildGroup(title, rows) {
@@ -998,6 +1060,27 @@ const HTML_TAIL = `;
       ]));
     }
 
+    if (s.basalDelivery && s.basalDelivery.available) {
+      var bd = s.basalDelivery;
+      var stateRow = function (label, st) {
+        if (!st) return null;
+        if (!st.minutes && label === 'Limited') return null;
+        return [label, fmtMins(st.minutes) + ' (' + st.percent + '%)' +
+          (st.episodes ? ' · ' + st.episodes + '×' : '')];
+      };
+      var bdRows = [
+        stateRow('Normal', bd.normal), stateRow('Suspended', bd.suspend),
+        stateRow('At max', bd.max), stateRow('Limited', bd.limited),
+      ].filter(Boolean);
+      if (bd.longestSuspend) {
+        bdRows.push(['Longest suspend', fmtMins(bd.longestSuspend.minutes) + ' from ' + fmtTimeOfDay(bd.longestSuspend.start)]);
+      }
+      if (bd.longestMax) {
+        bdRows.push(['Longest at max', fmtMins(bd.longestMax.minutes) + ' from ' + fmtTimeOfDay(bd.longestMax.start)]);
+      }
+      body.appendChild(buildGroup('Basal delivery', bdRows));
+    }
+
     (s.settings || []).forEach(function (set, i) {
       var label = s.settings.length > 1 ? 'Settings in force (change ' + (i + 1) + ')' : 'Settings in force';
       body.appendChild(buildGroup(label, [
@@ -1089,6 +1172,8 @@ const HTML_TAIL = `;
     var zoneLabel = ZONE_LABEL[p.zone] || '';
     tooltip.appendChild(el('div', 'tt-value', fmt(p.avg) + ' ' + DATA.unitLabel + (zoneLabel ? ' · ' + zoneLabel : '')));
     tooltip.appendChild(el('div', 'tt-sub', 'range ' + fmt(p.min) + '–' + fmt(p.max) + ' · n=' + p.n));
+    var bState = basalAt(p.epoch);
+    if (bState) tooltip.appendChild(el('div', 'tt-sub', 'Basal: ' + BASAL_LABEL[bState]));
     p.boluses.forEach(function (b) {
       var parts = [];
       if (b.units != null) parts.push(b.units + 'u');
@@ -1365,10 +1450,13 @@ const HTML_TAIL = `;
  *   computeSummary() result per day in xAxis.days (same order, same index),
  *   narrowed to that single calendar day -- powers the "Day details" panels.
  *   Optional/omittable; panels just don't render without it.
+ * @param {Array<[number,number,string]>} [p.basal]  Basal-state intervals as
+ *   [startEpoch, endEpoch, state] triples (normal/suspend/max/limited), clipped
+ *   to the charted ranges -- drawn as a strip along the bottom of the plot.
  * @returns {string} a complete, self-contained HTML document.
  */
 export function renderChartHtml(p) {
-  const { points, boluses, xAxis, units, low, high, tirPct, timeLowPct, timeHighPct, avgDisplay, window, daySummaries } = p;
+  const { points, boluses, xAxis, units, low, high, tirPct, timeLowPct, timeHighPct, avgDisplay, window, daySummaries, basal } = p;
   const unitLabel = units === 'mgdl' ? 'mg/dL' : 'mmol/L';
   const days = xAxis.days || [];
   const dayCount = days.length;
@@ -1397,6 +1485,7 @@ export function renderChartHtml(p) {
     boluses: (boluses || []).map((b) => ({ t: b.t, units: b.units, carbs: b.carbs, class: b.class })),
     days,
     daySummaries: daySummaries || [],
+    basal: basal || [],
     low,
     high,
     units,

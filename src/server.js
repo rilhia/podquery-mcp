@@ -62,6 +62,9 @@ import {
   buildChartDaySegments,
   buildDaySummaries,
   summariseBasalStates,
+  clipBasalIntervals,
+  basalByHour,
+  basalHeadline,
   getThresholds,
   calculateTIRMetrics,
   toDisplay,
@@ -314,7 +317,12 @@ server.registerTool(
       'Glooko daily data exists basalUnits, basalDayCount, ' +
       'averageBasalUnitsPerDay, basalPercent, bolusPercent); bolusArchitecture ' +
       '(counts by bolus type); carbs (carbsGrams, carbsPerDay, carbEntryCount); ' +
-      'and settings (the time-segmented profiles in force). All timestamps are ' +
+      'settings (the time-segmented profiles in force); and basalDelivery (how ' +
+      'the Omnipod 5 algorithm spent the window: minutes and percent in each ' +
+      'state normal/suspend/max/limited, the longest suspend and longest max ' +
+      'run, and the hour of day where suspend and max are most common. These ' +
+      'are STATES, not insulin units; use get_basal_delivery for the timeline). ' +
+      'All timestamps are ' +
       'plain wall clock time (see start/end parameter notes), not UTC.',
     inputSchema: {
       start: z.string().describe(startDesc),
@@ -346,6 +354,13 @@ server.registerTool(
         bundle.dailyInsulin
       );
       summary.servedFromArchive = bundle.servedFromArchive;
+      summary.basalDelivery = basalHeadline(
+        clipBasalIntervals(
+          bundle.basalStates || [],
+          Math.floor(Date.parse(s) / 1000),
+          Math.floor(Date.parse(e) / 1000)
+        )
+      );
       if (!bundle.timeline.length) {
         return jsonResult({
           ...summary,
@@ -536,7 +551,13 @@ server.registerTool(
       'it as-is with no conversion.\n\n' +
       'Returns: a byHour array of up to 24 rows, each with hour (wall clock, ' +
       '"HH:00"), averageBG, timeInRange, timeLow, timeHigh and the reading ' +
-      'count for that hour. Glucose values are in the configured unit.',
+      'count for that hour. When basal-state data exists, each row also has a ' +
+      '"basal" object: the share of observed time in that hour spent in each ' +
+      'Omnipod 5 algorithm state (normalPercent, suspendPercent, maxPercent, ' +
+      'limitedPercent, plus observedMinutes). These are STATES, not insulin ' +
+      'units, pooled across days like the glucose figures, so "suspendPercent ' +
+      '40 at 03:00" means basal was paused for 40% of the 03:00 hours observed. ' +
+      'Glucose values are in the configured unit.',
     inputSchema: {
       start: z.string().describe(startDesc),
       end: z.string().describe(endDesc),
@@ -554,10 +575,33 @@ server.registerTool(
       const thresholds = getThresholds(units, lower, upper);
       const bundle = await getProcessedRange(s, e);
       const hourly = calculateHourly(bundle.timeline, thresholds, units);
+      // Attach pooled basal-state shares to each hour that has basal data.
+      const basalRows = basalByHour(
+        clipBasalIntervals(
+          bundle.basalStates || [],
+          Math.floor(Date.parse(s) / 1000),
+          Math.floor(Date.parse(e) / 1000)
+        )
+      );
+      const basalByHourNum = new Map(basalRows.map((r) => [r.hourNum, r]));
+      const byHour = hourly.map((row) => {
+        const b = basalByHourNum.get(row.hourNum);
+        if (!b) return row;
+        return {
+          ...row,
+          basal: {
+            observedMinutes: b.observedMinutes,
+            normalPercent: b.normalPercent,
+            suspendPercent: b.suspendPercent,
+            maxPercent: b.maxPercent,
+            limitedPercent: b.limitedPercent,
+          },
+        };
+      });
       return jsonResult({
         window: { start: s, end: e },
         unit: units === 'mgdl' ? 'mg/dL' : 'mmol/L',
-        byHour: hourly,
+        byHour,
       });
     } catch (err) {
       return errorResult(err.message);
@@ -838,7 +882,10 @@ server.registerTool(
       'bolus markers (hoverable in their own right for that bolus\'s units/ ' +
       'carbs/type, in addition to the aligned CGM reading\'s own tooltip), a ' +
       'header stat row (time in range, average glucose, time low, time high), ' +
-      'a legend, and hover tooltips — saves it to a file, and ' +
+      'a colour-coded strip along the bottom of the chronological chart showing ' +
+      'the Omnipod 5 basal state over time (normal, suspended, at max, limited; ' +
+      'states, not insulin units; the hover tooltip and data table also name the ' +
+      'state at each reading), a legend, and hover tooltips — saves it to a file, and ' +
       'opens it directly in the patient\'s default web browser. USE THIS ' +
       'instead of get_chart_series whenever the patient wants to SEE a chart.\n\n' +
       'Multi-day charts open with a Chronological/Overlay toggle: chronological ' +
@@ -856,7 +903,8 @@ server.registerTool(
       'default for a single day, collapsed for multiple), with that day\'s full ' +
       'glucose control (average, GMI, TIR/low/high, std dev, CV), extremes ' +
       '(highest/lowest with times), best/worst hour, insulin (bolus units/count/ ' +
-      'avg, basal units, bolus-basal split), bolus type counts, carbs, and the ' +
+      'avg, basal units, bolus-basal split), basal delivery (minutes and share ' +
+      'in each algorithm state, longest suspend and max runs), bolus type counts, carbs, and the ' +
       'settings in force — the SAME figures get_diabetes_summary would return ' +
       'for that single day, computed by the identical aggregator so the two ' +
       'never disagree. Hiding a day\'s filter chip hides its detail panel too.\n\n' +
@@ -1013,6 +1061,7 @@ server.registerTool(
       const allDays = [];
       const allDaySummaries = [];
       const allCgmMmol = [];
+      const allBasal = [];
       let rawCgmReadingCount = 0;
       for (const r of effectiveRanges) {
         const bundle = await getProcessedRange(r.start, r.end);
@@ -1049,8 +1098,13 @@ server.registerTool(
         // a time, so the chart's day panels never drift from that tool's
         // own numbers.
         allDaySummaries.push(
-          ...buildDaySummaries(daySegs, bundle.timeline, bundle.dailyInsulin, bundle.settingsHistory, thresholdsMmol, unitLabel)
+          ...buildDaySummaries(daySegs, bundle.timeline, bundle.dailyInsulin, bundle.settingsHistory, thresholdsMmol, unitLabel, bundle.basalStates)
         );
+        // Basal-state strip along the bottom of the chart: clipped to this
+        // range, compact [startEpoch, endEpoch, state] triples.
+        for (const bi of clipBasalIntervals(bundle.basalStates || [], sEpoch, eEpoch)) {
+          allBasal.push([bi.startEpoch, bi.endEpoch, bi.state]);
+        }
         allCgmMmol.push(...slice.filter((i) => i.type === 'CGM').map((i) => i.val));
       }
       allPoints.sort((a, b) => Date.parse(a.t) - Date.parse(b.t));
@@ -1076,6 +1130,7 @@ server.registerTool(
         avgDisplay: toDisplay(avgMmol, units),
         window: { start: effectiveRanges[0].start, end: effectiveRanges[effectiveRanges.length - 1].end },
         daySummaries: allDaySummaries,
+        basal: allBasal,
       });
 
       const chartsDir = resolveChartsDir();
@@ -1165,7 +1220,12 @@ server.registerTool(
       const e = assertIsoDate(end, 'end');
       assertWithinCap(s, e, CAPS.summaryMaxDays, 'get_basal_delivery');
       const bundle = await getProcessedRange(s, e);
-      const intervals = bundle.basalStates || [];
+      // Clip to the window: stored intervals can overhang its edges.
+      const intervals = clipBasalIntervals(
+        bundle.basalStates || [],
+        Math.floor(Date.parse(s) / 1000),
+        Math.floor(Date.parse(e) / 1000)
+      );
       const summary = summariseBasalStates(intervals);
       const result = {
         window: { start: s, end: e },

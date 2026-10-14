@@ -1393,7 +1393,7 @@ export function narrowSettingsHistory(fullHistory, subStartEpoch, subEndEpoch) {
  * Returns one { dayKey, summary } per segment. dayKey is the wall-clock
  * YYYY-MM-DD the segment starts on, matching dailyInsulin's own dayUtc key.
  */
-export function buildDaySummaries(daySegs, timeline, dailyInsulin, settingsHistory, thresholds, unitLabel) {
+export function buildDaySummaries(daySegs, timeline, dailyInsulin, settingsHistory, thresholds, unitLabel, basalStates = null) {
   if (!daySegs || !daySegs.length) return [];
   const segs = daySegs.map((d) => ({
     startEpoch: Date.parse(d.startT) / 1000,
@@ -1417,6 +1417,11 @@ export function buildDaySummaries(daySegs, timeline, dailyInsulin, settingsHisto
     const dayInsulin = (dailyInsulin || []).filter((d) => d.dayUtc === seg.dayKey);
     const daySettings = narrowSettingsHistory(settingsHistory, seg.startEpoch, seg.endEpoch);
     const summary = computeSummary(buckets[i], null, daySettings, thresholds, unitLabel, 'exact', dayInsulin);
+    if (basalStates && basalStates.length) {
+      summary.basalDelivery = basalHeadline(
+        clipBasalIntervals(basalStates, seg.startEpoch, seg.endEpoch)
+      );
+    }
     return { dayKey: seg.dayKey, summary };
   });
 }
@@ -1631,6 +1636,115 @@ export function summariseBasalStates(intervals) {
       limited: 'System lost CGM signal (>20 min) and ran a fixed preset basal. The smart algorithm was NOT adjusting; glucose excursions during limited mode are not attributable to algorithm decisions.',
       normal: 'Ordinary automated delivery.',
     },
+  };
+}
+
+/**
+ * Trim basal-state intervals to [lo, hi] (epoch seconds), dropping any that
+ * fall wholly outside. Stored intervals can overhang a query window (a long
+ * "normal" run may start days before it), so anything that totals or buckets
+ * time must clip first or it counts time outside the window.
+ */
+export function clipBasalIntervals(intervals, lo, hi) {
+  const out = [];
+  for (const i of intervals || []) {
+    const startEpoch = Math.max(i.startEpoch, lo);
+    const endEpoch = Math.min(i.endEpoch, hi);
+    if (endEpoch <= startEpoch) continue;
+    out.push({
+      ...i,
+      startEpoch,
+      endEpoch,
+      start: new Date(startEpoch * 1000).toISOString(),
+      end: new Date(endEpoch * 1000).toISOString(),
+      minutes: Math.round((endEpoch - startEpoch) / 60),
+    });
+  }
+  return out;
+}
+
+const BASAL_STATES = ['normal', 'suspend', 'max', 'limited'];
+
+/**
+ * Pool basal-state time by wall-clock hour of day. Every interval is split at
+ * hour boundaries and its seconds added to that hour's per-state total, so the
+ * 07:00 row combines all the time spent in each state during any 07:00 hour in
+ * the window. Percentages are of the minutes actually observed in that hour,
+ * so a window with gaps is not distorted. Returns rows for hours with data.
+ */
+export function basalByHour(intervals) {
+  const secs = Array.from({ length: 24 }, () => ({
+    normal: 0, suspend: 0, max: 0, limited: 0,
+  }));
+  for (const i of intervals || []) {
+    let t = i.startEpoch;
+    while (t < i.endEpoch) {
+      const hourEnd = Math.floor(t / 3600) * 3600 + 3600;
+      const next = Math.min(hourEnd, i.endEpoch);
+      const h = new Date(t * 1000).getUTCHours();
+      if (secs[h][i.state] !== undefined) secs[h][i.state] += next - t;
+      t = next;
+    }
+  }
+  const rows = [];
+  for (let h = 0; h < 24; h++) {
+    const total = BASAL_STATES.reduce((a, k) => a + secs[h][k], 0);
+    if (!total) continue;
+    const row = {
+      hourNum: h,
+      hour: String(h).padStart(2, '0') + ':00',
+      observedMinutes: Math.round(total / 60),
+    };
+    for (const k of BASAL_STATES) {
+      row[k + 'Percent'] = +((secs[h][k] / total) * 100).toFixed(1);
+    }
+    rows.push(row);
+  }
+  return rows;
+}
+
+/**
+ * Headline basal-delivery picture for a summary: state totals plus the longest
+ * suspend and max runs and the hours of day where each is most common.
+ * Expects intervals already clipped to the window.
+ */
+export function basalHeadline(intervals) {
+  const base = summariseBasalStates(intervals);
+  if (!base.available) return base;
+  const longest = (state) => {
+    let best = null;
+    for (const i of intervals) {
+      if (i.state !== state) continue;
+      const mins = Math.round((i.endEpoch - i.startEpoch) / 60);
+      if (!best || mins > best.minutes) best = { minutes: mins, start: i.start, end: i.end };
+    }
+    return best;
+  };
+  const rows = basalByHour(intervals);
+  const peak = (key) => {
+    let best = null;
+    for (const r of rows) {
+      if (r.observedMinutes < 60) continue; // ignore hours with almost no data
+      if (r[key] > 0 && (!best || r[key] > best.percent)) {
+        best = { hour: r.hour, percent: r[key] };
+      }
+    }
+    return best;
+  };
+  return {
+    available: true,
+    spanHours: base.spanHours,
+    normal: base.normal,
+    suspend: base.suspend,
+    max: base.max,
+    limited: base.limited,
+    longestSuspend: longest('suspend'),
+    longestMax: longest('max'),
+    mostSuspendedHour: peak('suspendPercent'),
+    mostMaxHour: peak('maxPercent'),
+    note:
+      'Algorithm STATES, not insulin units. suspend = basal paused, max = at its ' +
+      'ceiling, limited = fixed preset after CGM loss. Wall-clock time.',
   };
 }
 

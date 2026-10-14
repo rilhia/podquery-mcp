@@ -358,7 +358,8 @@ export async function topUp(onProgress = () => {}) {
     return;
   }
 
-  const start = Math.max(0, coverageEpoch - TOPUP_TRAILING_SECONDS);
+  // Midnight-aligned so the first pulled day is whole, not clipped.
+  const start = Math.floor(Math.max(0, coverageEpoch - TOPUP_TRAILING_SECONDS) / 86400) * 86400;
   if (now <= start) {
     onProgress('archive already current; nothing to top up');
     return;

@@ -113,6 +113,11 @@ export function dayStr(epochSeconds) {
   return new Date(epochSeconds * 1000).toISOString().split('T')[0];
 }
 
+/** Midnight (00:00:00 wall-clock digits) at or before the given epoch. */
+export function startOfDayEpochSeconds(epochSeconds) {
+  return Math.floor(epochSeconds / 86400) * 86400;
+}
+
 export function startOfTodayEpochSeconds() {
   const t = new Date();
   t.setUTCHours(0, 0, 0, 0);
@@ -170,12 +175,10 @@ export async function pullAndIngest(startISO, endISO) {
 
   // Basal delivery states (normal/suspend/max/limited), derived from the bar
   // and mode series and stored as collapsed intervals.
-  const basalStates = deriveBasalStates(
-    raw.data1,
-    Math.floor(Date.parse(startISO) / 1000),
-    Math.floor(Date.parse(endISO) / 1000)
-  );
-  if (basalStates.length) ingestBasalStates(basalStates);
+  const basalLo = Math.floor(Date.parse(startISO) / 1000);
+  const basalHi = Math.floor(Date.parse(endISO) / 1000);
+  const basalStates = deriveBasalStates(raw.data1, basalLo, basalHi);
+  if (basalStates.length) ingestBasalStates(basalStates, basalLo, basalHi);
 
   // Device events: pod (setSiteChange) and sensor (cgmSensorChange) changes,
   // deduplicated by timestamp.
@@ -253,7 +256,8 @@ async function ensureCoverage(startISO, endISO) {
     // tail, keyed off the OLDEST stream max so a lagging stream is included, with
     // a short trailing overlap to refresh the partial boundary day.
     const TOPUP_TRAILING = 2 * 86400;
-    const from = Math.max(0, coverageEpoch - TOPUP_TRAILING);
+    // Start at midnight so the first pulled day is whole, not clipped.
+    const from = startOfDayEpochSeconds(Math.max(0, coverageEpoch - TOPUP_TRAILING));
     await withSyncLock(() =>
       pullAndIngest(
         new Date(from * 1000).toISOString(),

@@ -103,7 +103,11 @@ function ensureSqlJsLoaded() {
 //       (which may already have quietly lost one of a colliding pair) gets a
 //       fresh chance to capture both from Glooko, though whether Glooko's own
 //       backend still has both to give us at that point is unverified.
-const SCHEMA_VERSION = 6;
+//   7 = basal_state repair. Earlier builds deleted whole days and re-inserted
+//       only the intervals inside a partial pull window, wiping the earlier
+//       part of any day a mid-day pull touched. Ingest is now window based and
+//       pulls start at midnight; force a re-pull to restore lost intervals.
+const SCHEMA_VERSION = 7;
 
 /**
  * Serialise the in-memory database to disk. Cheap enough to call once per
@@ -533,27 +537,65 @@ export function ingestDailyInsulin(records, todayUtc) {
 }
 
 /**
- * Upsert basal-state intervals (normal/suspend/max/limited), keyed by start
- * epoch. Idempotent: re-deriving a day's intervals overwrites by start time.
- * Note: a re-pull whose interval boundaries shift slightly could leave a stale
- * old interval; we clear the window's day(s) first to keep it clean.
+ * Replace basal-state intervals for the pulled window [windowStart, windowEnd]
+ * (epoch seconds), leaving everything outside the window untouched.
+ *
+ * Why window based and not day based: a pull covers only part of a day when it
+ * starts or ends mid-day, so its derived intervals are clipped to the window.
+ * Deleting whole days and inserting only the clipped intervals wiped the
+ * earlier part of the day. Here we delete only rows overlapping the window,
+ * put back the parts of those rows that stick out beyond it, insert the fresh
+ * intervals, then join same-state rows that now touch at the window edges.
+ * Re-running with the same window is idempotent.
  */
-export function ingestBasalStates(intervals) {
+export function ingestBasalStates(intervals, windowStart, windowEnd) {
   if (!intervals || !intervals.length) return;
   const conn = d();
-  const days = [...new Set(intervals.map((i) => i.start.split('T')[0]))];
-  const del = conn.prepare('DELETE FROM basal_state WHERE day_utc = ?');
-  const stmt = conn.prepare(
+  const lo = Number.isFinite(windowStart)
+    ? windowStart
+    : Math.min(...intervals.map((i) => i.startEpoch));
+  const hi = Number.isFinite(windowEnd)
+    ? windowEnd
+    : Math.max(...intervals.map((i) => i.endEpoch));
+  const dayOf = (e) => new Date(e * 1000).toISOString().split('T')[0];
+
+  const selOverlap = conn.prepare(
+    'SELECT start_epoch, end_epoch, state FROM basal_state WHERE end_epoch > ? AND start_epoch < ?'
+  );
+  const delOverlap = conn.prepare(
+    'DELETE FROM basal_state WHERE end_epoch > ? AND start_epoch < ?'
+  );
+  const ins = conn.prepare(
     `INSERT INTO basal_state (start_epoch, end_epoch, state, day_utc)
      VALUES (?, ?, ?, ?)
      ON CONFLICT(start_epoch) DO UPDATE SET
        end_epoch=excluded.end_epoch, state=excluded.state, day_utc=excluded.day_utc`
   );
+  const selTouch = conn.prepare(
+    `SELECT a.start_epoch AS a_start, b.start_epoch AS b_start, b.end_epoch AS b_end
+       FROM basal_state a JOIN basal_state b
+         ON a.end_epoch = b.start_epoch AND a.state = b.state
+      WHERE a.end_epoch = ?`
+  );
+  const extend = conn.prepare('UPDATE basal_state SET end_epoch = ? WHERE start_epoch = ?');
+  const delStart = conn.prepare('DELETE FROM basal_state WHERE start_epoch = ?');
+
   conn.exec('BEGIN');
   try {
-    for (const day of days) del.run(day);
+    const old = selOverlap.all(lo, hi);
+    delOverlap.run(lo, hi);
+    for (const r of old) {
+      if (r.start_epoch < lo) ins.run(r.start_epoch, lo, r.state, dayOf(r.start_epoch));
+      if (r.end_epoch > hi) ins.run(hi, r.end_epoch, r.state, dayOf(hi));
+    }
     for (const i of intervals) {
-      stmt.run(i.startEpoch, i.endEpoch, i.state, i.start.split('T')[0]);
+      ins.run(i.startEpoch, i.endEpoch, i.state, dayOf(i.startEpoch));
+    }
+    for (const edge of [lo, hi]) {
+      for (const t of selTouch.all(edge)) {
+        extend.run(t.b_end, t.a_start);
+        delStart.run(t.b_start);
+      }
     }
     conn.exec('COMMIT');
   } catch (err) {
