@@ -3,4 +3,4 @@ npm-debug.log
 .env
 *.local
 data/
-*.mcpb
+*.mcpb.DS_Store
